@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  EC2 instance for Training Management System (TMS) Core Backend.
+  Includes secure networking, IAM role, CloudWatch logging, and encrypted storage.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment environment.
+
+  ProjectId:
+    Type: String
+    Default: 171f4434-79a6-4b92-b52a-74aef208755f
+    Description: Project identifier used for tagging.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where the EC2 instance will be deployed.
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID for the EC2 instance (should be in the specified VPC).
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedPattern: ".+"
+    Description: EC2 instance type for the TMS backend.
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: AMI ID to use for the instance (e.g., latest Amazon Linux 2023).
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access.
+
+  RootVolumeSizeGiB:
+    Type: Number
+    Default: 50
+    MinValue: 8
+    MaxValue: 1024
+    Description: Size of the root EBS volume in GiB.
+
+  EbsKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: >
+      Optional KMS Key ARN for EBS encryption. If empty, default EBS encryption settings are used.
+
+  AllowedSSHCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to access the instance over SSH (port 22).
+
+  InstanceProfileName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional existing instance profile name to use. If empty, a new one will be created.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: General Configuration
+        Parameters:
+          - Environment
+          - ProjectId
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcId
+          - SubnetId
+          - AllowedSSHCidr
+      - Label:
+          default: Compute Configuration
+        Parameters:
+          - InstanceType
+          - AmiId
+          - KeyName
+          - RootVolumeSizeGiB
+          - EbsKmsKeyArn
+          - InstanceProfileName
+
+Conditions:
+  UseCustomKmsKey: !Not [!Equals [!Ref EbsKmsKeyArn, ""]]
+  CreateInstanceProfile: !Equals [!Ref InstanceProfileName, ""]
+
+Resources:
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TMS Core Backend EC2 security group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "tms-core-ec2-sg-${Environment}"
+        - Key: ManagedBy
+          Value: ace
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectId
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: tms-core-ec2-logs-and-metadata
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowPutLogEvents
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource: "*"
+              - Sid: AllowDescribeTags
+                Effect: Allow
+                Action:
+                  - ec2:DescribeTags
+                Resource: "*"
+      Tags:
+        - Key: ManagedBy
+          Value: ace
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectId
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CreateInstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref InstanceRole
+      InstanceProfileName: !Sub "tms-core-ec2-profile-${Environment}"
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !If
+        - CreateInstanceProfile
+        - !Ref InstanceProfile
+        - !Ref InstanceProfileName
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref RootVolumeSizeGiB
+            VolumeType: gp3
+            Encrypted: true
+            KmsKeyId: !If
+              - UseCustomKmsKey
+              - !Ref EbsKmsKeyArn
+              - !Ref "AWS::NoValue"
+            DeleteOnTermination: true
+      Monitoring: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 2
+      Tags:
+        - Key: Name
+          Value: !Sub "tms-core-ec2-${Environment}"
+        - Key: ManagedBy
+          Value: ace
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectId
+
+Outputs:
+  InstanceId:
+    Description: ID of the EC2 instance.
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceId"
+
+  InstancePrivateIp:
+    Description: Private IP address of the EC2 instance.
+    Value: !GetAtt EC2Instance.PrivateIp
+    Export:
+      Name: !Sub "${AWS::StackName}-InstancePrivateIp"
+
+  InstanceSecurityGroupId:
+    Description: ID of the security group attached to the EC2 instance.
+    Value: !Ref InstanceSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceSecurityGroupId"
+
+  InstanceRoleArn:
+    Description: IAM Role ARN associated with the EC2 instance.
+    Value: !GetAtt InstanceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceRoleArn"
+
+  InstanceProfileNameOut:
+    Description: Name of the instance profile used by the EC2 instance.
+    Value: !If
+      - CreateInstanceProfile
+      - !Ref InstanceProfile
+      - !Ref InstanceProfileName
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceProfileName"
