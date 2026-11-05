@@ -14,6 +14,9 @@ These files describe service behavior and implementation tasks — they are **no
 - `specs/notification-service/plan.md`
 - `specs/notification-service/tasks.md`
 
+## Services
+- [`account-management-service/`](account-management-service/README.md) — Java 21 / Spring Boot 3 scaffold (SCAFFOLD-SVC-001)
+
 ## Next steps
 - Review `proposal.md`, `specs/spec.md`, `design.md`, and `tasks.md` under `openspec/changes/`.
 - Use your IDE or tooling that supports [OpenSpec](https://github.com/Fission-AI/OpenSpec) (e.g. `/opsx:apply` where applicable).

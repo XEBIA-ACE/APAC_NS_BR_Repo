@@ -1,0 +1,13 @@
+# Test profile: in-memory H2 (PostgreSQL mode) and no Redis, so tests run without external services.
+spring:
+  datasource:
+    url: jdbc:h2:mem:account_management;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+  cache:
+    type: none
+
+management:
+  health:
+    redis:
+      enabled: false
